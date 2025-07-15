@@ -24,10 +24,9 @@ load_dotenv()
 
 # Налаштування змінних оточення
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
-GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
-SERVICE_ACCOUNT_FILE = "credentials.json"
+OPENAI_API_KEY      = os.getenv("OPENAI_API_KEY")
+ADMIN_CHAT_ID       = os.getenv("ADMIN_CHAT_ID")
+GOOGLE_SHEET_ID     = os.getenv("GOOGLE_SHEET_ID")
 
 # Перевірка змінних
 logging.basicConfig(level=logging.INFO)
@@ -48,7 +47,7 @@ dp = Dispatcher(bot)
 async def health(request):
     return web.Response(text="OK")
 
-# Запуск невеликого веб‑сервера для Railway
+# Запуск веб‑сервера для Railway
 def start_health_server():
     app = web.Application()
     app.add_routes([web.get('/', health)])
@@ -66,11 +65,12 @@ TIME_INTERVALS = {
     "ввечері":     ("17:00", "20:00")
 }
 
-# Команди
+# /start
 @dp.message_handler(commands=['start'])
 async def start_handler(message: types.Message):
     await message.answer("Привіт! Напишіть, на яку процедуру бажаєте записатись і коли 💅")
 
+# /cancel
 @dp.message_handler(commands=['cancel'])
 async def cancel_handler(message: types.Message):
     await message.answer("Напишіть, що саме бажаєте скасувати (процедуру, дату, інтервал).")
@@ -82,10 +82,10 @@ async def handle_message(message: types.Message):
     await message.answer("🔍 Аналізую ваше повідомлення...")
 
     # 1. AI‑парсинг intent
-    parsed = await parse_request_with_gpt(user_input, openai)
+    parsed     = await parse_request_with_gpt(user_input, openai)
     proc       = parsed.get("procedure")
-    raw_date   = parsed.get("date")        # "понеділок" або "YYYY-MM-DD"
-    time_range = parsed.get("time_range")  # "ранком" тощо
+    raw_date   = parsed.get("date")
+    time_range = parsed.get("time_range")
 
     # 2. Нормалізація дати
     date = normalize_date(raw_date)
@@ -121,8 +121,10 @@ async def handle_message(message: types.Message):
 if __name__ == '__main__':
     threading.Thread(target=start_health_server, daemon=True).start()
     from aiogram import executor
-    try:
-        executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
-    except TerminatedByOtherGetUpdates:
-        logging.warning("Ігноруємо TerminatedByOtherGetUpdates — перезапускаємо polling")
-        executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
+    while True:
+        try:
+            executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
+            break
+        except TerminatedByOtherGetUpdates:
+            logging.warning("Polling terminated by other getUpdates, restarting...")
+            continue
