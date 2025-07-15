@@ -1,5 +1,6 @@
-aiogram==2.25.1
+aiogram==2.25.2
 openai
 gspread
-google-auth
-google-api-python-client
+oauth2client
+python-dateutil
+apscheduler
