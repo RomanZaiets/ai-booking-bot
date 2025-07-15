@@ -22,20 +22,20 @@ from scheduler import schedule_reminder
 # Завантажити змінні оточення
 load_dotenv()
 
-# Конфігурація з environment variables
+# Конфігурація
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY      = os.getenv("OPENAI_API_KEY")
 ADMIN_CHAT_ID       = os.getenv("ADMIN_CHAT_ID")
 GOOGLE_SHEET_ID     = os.getenv("GOOGLE_SHEET_ID")
 
-# Перевірка налаштувань
+# Перевірка обов'язкових змінних
 logging.basicConfig(level=logging.INFO)
 if not TELEGRAM_BOT_TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN is not set in environment variables")
 if not OPENAI_API_KEY:
     logging.warning("OPENAI_API_KEY is not set; AI features will fail.")
 
-# Логування OpenAI API Key (для перевірки)
+# Логування для перевірки
 logging.info(f"🚀 OPENAI_API_KEY = {OPENAI_API_KEY}")
 
 # Ініціалізація клієнтів
@@ -47,18 +47,18 @@ dp = Dispatcher(bot)
 async def health(request):
     return web.Response(text="OK")
 
-# Запуск невеликого веб-сервера для Railway
+# Запуск веб-сервера для Railway
 def start_health_server():
     app = web.Application()
     app.add_routes([web.get('/', health)])
     port = int(os.getenv('PORT', 8000))
     web.run_app(app, port=port, handle_signals=False)
 
-# Видалити webhook при старті polling
+# Видалити webhook перед polling
 async def on_startup(dp):
     await bot.delete_webhook(drop_pending_updates=True)
 
-# Інтервали часу бронювання
+# Інтервали часу
 TIME_INTERVALS = {
     "ранком":      ("08:00", "12:00"),
     "після обіду": ("13:00", "17:00"),
@@ -75,19 +75,19 @@ async def start_handler(message: types.Message):
 async def cancel_handler(message: types.Message):
     await message.answer("Напишіть, що саме бажаєте скасувати (процедуру, дату, інтервал).")
 
-# Основний хендлер: smart бронювання + fallback AI чат
+# Основний хендлер
 @dp.message_handler()
 async def handle_message(message: types.Message):
     user_input = message.text
-    await message.answer("🔍 Аналізую ваше повідомлення...")
+    await message.answer("🔍 Аналізую ваше повідомлення...🔍")
 
-    # AI парсинг запиту
+    # AI парсинг intent
     parsed     = await parse_request_with_gpt(user_input, openai)
     proc       = parsed.get("procedure")
     raw_date   = parsed.get("date")
     time_range = parsed.get("time_range")
 
-    # Нормалізація дати до YYYY-MM-DD
+    # Нормалізація дати
     date = normalize_date(raw_date)
 
     # Smart бронювання
@@ -98,14 +98,14 @@ async def handle_message(message: types.Message):
                 "Не розумію інтервал; скажіть 'ранком', 'після обіду' або 'ввечері'."
             )
         free_slots = get_free_slots(date, GOOGLE_SHEET_ID, os.getenv("GOOGLE_CREDENTIALS"))
-        recs = filter_slots_by_interval(free_slots, start, end)
-        if recs:
-            return await message.answer(f"Вільні слоти у {raw_date} ({time_range}): {', '.join(recs)}")
+        available = filter_slots_by_interval(free_slots, start, end)
+        if available:
+            return await message.answer(f"Вільні слоти у {raw_date} ({time_range}): {', '.join(available)}")
         else:
             return await message.answer(f"На {raw_date} {time_range} немає вільних слотів.")
 
-    # Fallback: AI чат
-    await message.answer("🤖 Надаю відповідь AI...")
+    # Fallback AI чат
+    await message.answer("🤖 Дозволено AI відповісти на ваше питання...")
     try:
         resp = await openai.ChatCompletion.acreate(
             model="gpt-3.5-turbo",
@@ -117,16 +117,15 @@ async def handle_message(message: types.Message):
         logging.error("Fallback AI error", exc_info=e)
         await message.answer("Вибачте, помилка при зверненні до AI.")
 
-# Старт бота
+# Запуск бота
 if __name__ == '__main__':
-    # Запустити Health сервер
     threading.Thread(target=start_health_server, daemon=True).start()
-    # Long polling з автоматичним рестартом при конфлікті
     from aiogram import executor
+    # цикл з рестартом poll при конфлікті
     while True:
         try:
             executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
             break
         except TerminatedByOtherGetUpdates:
-            logging.warning("Polling terminated by other getUpdates, restarting...")
+            logging.warning("Polling conflict detected, restarting polling...")
             continue
