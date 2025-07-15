@@ -2,8 +2,11 @@ import logging
 from aiogram import Bot, Dispatcher, types
 import openai
 import os
+from dotenv import load_dotenv
 from utils import parse_request_with_gpt, is_slot_available, save_to_sheet
 from scheduler import schedule_reminder
+
+load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -30,7 +33,8 @@ async def handle_message(message: types.Message):
     await message.answer("🔍 Аналізую ваше повідомлення...")
 
     parsed = await parse_request_with_gpt(user_input, openai)
-    await message.answer(f"🧠 Я зрозумів:\n{parsed}")
+    await message.answer(f"🧠 Я зрозумів:
+{parsed}")
 
     proc, date, time = parsed.get("procedure"), parsed.get("date"), parsed.get("time")
     if not (proc and date and time):
@@ -46,7 +50,8 @@ async def handle_message(message: types.Message):
     await message.answer("✅ Вас записано! Очікуйте підтвердження.")
 
     schedule_reminder(bot, message.chat.id, date, time, proc)
-    await bot.send_message(ADMIN_CHAT_ID, f"📬 Новий запис від {message.from_user.full_name}:\n{parsed}")
+    await bot.send_message(ADMIN_CHAT_ID, f"📬 Новий запис від {message.from_user.full_name}:
+{parsed}")
 
 if __name__ == '__main__':
     from aiogram import executor
