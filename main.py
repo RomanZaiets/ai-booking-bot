@@ -35,8 +35,12 @@ def start_health_server():
     app = web.Application()
     app.add_routes([web.get('/', health)])
     port = int(os.environ.get('PORT', 8000))
-    # Виключаємо обробку сигналів у додатку в окремому потоці
     web.run_app(app, port=port, handle_signals=False)
+
+# Функція для видалення вебхуку при старті
+async def on_startup(dp):
+    # Прибирання можливого webhook, щоб використовувати long polling
+    await bot.delete_webhook(drop_pending_updates=True)
 
 # Хендлери Telegram
 @dp.message_handler(commands=['start'])
@@ -75,6 +79,6 @@ if __name__ == '__main__':
     # Запускаємо health server у окремому потоці
     threading.Thread(target=start_health_server, daemon=True).start()
 
-    # Починаємо long polling Telegram
+    # Починаємо long polling Telegram з on_startup для видалення вебхуку
     from aiogram import executor
-    executor.start_polling(dp, skip_updates=True)
+    executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
