@@ -1,7 +1,8 @@
-aiogram==2.25.2
+aiohttp>=4.0.0
+aiogram
 openai
+python-dotenv
 gspread
 oauth2client
+aiohttp
 python-dateutil
-apscheduler
-python-dotenv
