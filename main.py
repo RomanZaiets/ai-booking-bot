@@ -19,7 +19,7 @@ SERVICE_ACCOUNT_FILE = "credentials.json"
 
 # Перевірка наявності токена
 if not TELEGRAM_BOT_TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN is not set in .env")
+    raise ValueError("TELEGRAM_BOT_TOKEN is not set in environment variables")
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
@@ -35,7 +35,8 @@ def start_health_server():
     app = web.Application()
     app.add_routes([web.get('/', health)])
     port = int(os.environ.get('PORT', 8000))
-    web.run_app(app, port=port)
+    # Виключаємо обробку сигналів у додатку в окремому потоці
+    web.run_app(app, port=port, handle_signals=False)
 
 # Хендлери Telegram
 @dp.message_handler(commands=['start'])
