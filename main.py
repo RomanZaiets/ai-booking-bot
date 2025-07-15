@@ -7,6 +7,7 @@ import openai
 import gspread
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
+from aiogram.utils.exceptions import TerminatedByOtherGetUpdates
 from dotenv import load_dotenv
 from utils import (
     parse_request_with_gpt,
@@ -120,4 +121,8 @@ async def handle_message(message: types.Message):
 if __name__ == '__main__':
     threading.Thread(target=start_health_server, daemon=True).start()
     from aiogram import executor
-    executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
+    try:
+        executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
+    except TerminatedByOtherGetUpdates:
+        logging.warning("Ігноруємо TerminatedByOtherGetUpdates — перезапускаємо polling")
+        executor.start_polling(dp, skip_updates=True, on_startup=on_startup)
