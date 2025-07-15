@@ -1,5 +1,5 @@
-aiogram==2.25.2
+aiogram==2.25.1
 openai
-google-api-python-client
+gspread
 google-auth
-apscheduler
+google-api-python-client
