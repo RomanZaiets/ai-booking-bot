@@ -5,4 +5,3 @@ oauth2client
 python-dateutil
 apscheduler
 python-dotenv
-web: python main.py
