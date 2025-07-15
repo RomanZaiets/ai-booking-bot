@@ -22,20 +22,20 @@ from scheduler import schedule_reminder
 # Завантажити змінні оточення
 load_dotenv()
 
-# Налаштування змінних оточення
+# Конфігурація з environment variables
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY      = os.getenv("OPENAI_API_KEY")
 ADMIN_CHAT_ID       = os.getenv("ADMIN_CHAT_ID")
 GOOGLE_SHEET_ID     = os.getenv("GOOGLE_SHEET_ID")
 
-# Перевірка змінних
+# Перевірка налаштувань
 logging.basicConfig(level=logging.INFO)
 if not TELEGRAM_BOT_TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN is not set in environment variables")
 if not OPENAI_API_KEY:
     logging.warning("OPENAI_API_KEY is not set; AI features will fail.")
 
-# Дебаг API key
+# Логування OpenAI API Key (для перевірки)
 logging.info(f"🚀 OPENAI_API_KEY = {OPENAI_API_KEY}")
 
 # Ініціалізація клієнтів
@@ -47,50 +47,50 @@ dp = Dispatcher(bot)
 async def health(request):
     return web.Response(text="OK")
 
-# Запуск веб‑сервера для Railway
+# Запуск невеликого веб-сервера для Railway
 def start_health_server():
     app = web.Application()
     app.add_routes([web.get('/', health)])
     port = int(os.getenv('PORT', 8000))
     web.run_app(app, port=port, handle_signals=False)
 
-# Видалити webhook перед polling
+# Видалити webhook при старті polling
 async def on_startup(dp):
     await bot.delete_webhook(drop_pending_updates=True)
 
-# Інтервали часу
+# Інтервали часу бронювання
 TIME_INTERVALS = {
     "ранком":      ("08:00", "12:00"),
     "після обіду": ("13:00", "17:00"),
     "ввечері":     ("17:00", "20:00")
 }
 
-# /start
+# Команда /start
 @dp.message_handler(commands=['start'])
 async def start_handler(message: types.Message):
     await message.answer("Привіт! Напишіть, на яку процедуру бажаєте записатись і коли 💅")
 
-# /cancel
+# Команда /cancel
 @dp.message_handler(commands=['cancel'])
 async def cancel_handler(message: types.Message):
     await message.answer("Напишіть, що саме бажаєте скасувати (процедуру, дату, інтервал).")
 
-# Основний хендлер
+# Основний хендлер: smart бронювання + fallback AI чат
 @dp.message_handler()
 async def handle_message(message: types.Message):
     user_input = message.text
     await message.answer("🔍 Аналізую ваше повідомлення...")
 
-    # 1. AI‑парсинг intent
+    # AI парсинг запиту
     parsed     = await parse_request_with_gpt(user_input, openai)
     proc       = parsed.get("procedure")
     raw_date   = parsed.get("date")
     time_range = parsed.get("time_range")
 
-    # 2. Нормалізація дати
+    # Нормалізація дати до YYYY-MM-DD
     date = normalize_date(raw_date)
 
-    # 3. Smart‑бронювання
+    # Smart бронювання
     if proc and date and time_range:
         start, end = TIME_INTERVALS.get(time_range, (None, None))
         if not start:
@@ -104,8 +104,8 @@ async def handle_message(message: types.Message):
         else:
             return await message.answer(f"На {raw_date} {time_range} немає вільних слотів.")
 
-    # 4. Fallback AI‑чат
-    await message.answer("🤖 Дозволено AI відповісти на ваше питання...")
+    # Fallback: AI чат
+    await message.answer("🤖 Надаю відповідь AI...")
     try:
         resp = await openai.ChatCompletion.acreate(
             model="gpt-3.5-turbo",
@@ -117,9 +117,11 @@ async def handle_message(message: types.Message):
         logging.error("Fallback AI error", exc_info=e)
         await message.answer("Вибачте, помилка при зверненні до AI.")
 
-# Запуск
+# Старт бота
 if __name__ == '__main__':
+    # Запустити Health сервер
     threading.Thread(target=start_health_server, daemon=True).start()
+    # Long polling з автоматичним рестартом при конфлікті
     from aiogram import executor
     while True:
         try:
