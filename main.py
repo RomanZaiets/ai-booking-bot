@@ -1,125 +1,137 @@
 import logging
 import os
-import openai
+import datetime
 from aiogram import Bot, Dispatcher, types
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
+import openai
 from dotenv import load_dotenv
-from utils import (
-    parse_request_with_gpt,
-    normalize_date,
-    get_free_slots,
-    filter_slots_by_interval,
-    is_slot_available,
-    save_to_sheet,
-)
+from utils import write_credentials_to_file, save_to_sheet, get_free_slots, normalize_date
 from scheduler import schedule_reminder
 
-# ————— Завантажуємо змінні оточення —————
+# --- Завантаження конфігурації ---
 load_dotenv()
-
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY     = os.getenv("OPENAI_API_KEY")
 GOOGLE_SHEET_ID    = os.getenv("GOOGLE_SHEET_ID")
-ADMIN_CHAT_ID      = os.getenv("ADMIN_CHAT_ID")  # для повідомлень адміну
+GOOGLE_CREDENTIALS = os.getenv("GOOGLE_CREDENTIALS")
 
-# ————— Перевірка конфігурації —————
 if not TELEGRAM_BOT_TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN is not set in environment variables")
-if not OPENAI_API_KEY:
-    logging.warning("OPENAI_API_KEY is not set; AI‑функції не працюватимуть")
-if not GOOGLE_SHEET_ID:
-    raise ValueError("GOOGLE_SHEET_ID is not set in environment variables")
-if not ADMIN_CHAT_ID:
-    logging.warning("ADMIN_CHAT_ID is not set; адміністратор не отримає сповіщень")
+    raise ValueError("TELEGRAM_BOT_TOKEN is not set")
 
-# ————— Ініціалізація клієнтів —————
+# --- Логування ---
+logging.basicConfig(level=logging.INFO)
 openai.api_key = OPENAI_API_KEY
+
+# --- Ініціалізація ---
+storage = MemoryStorage()
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
-dp  = Dispatcher(bot)
+dp = Dispatcher(bot, storage=storage)
 
-# ————— Мапа часових інтервалів —————
-TIME_INTERVALS = {
-    "ранком":      ("08:00", "12:00"),
-    "після обіду": ("13:00", "17:00"),
-    "ввечері":     ("17:00", "20:00")
-}
+# --- Стани FSM ---
+class Booking(StatesGroup):
+    NAME      = State()
+    PROCEDURE= State()
+    DATE      = State()
+    TIME      = State()
 
-# ————— Команда /start —————
+# --- Кнопки ---
+main_kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+main_kb.add("Розпочати запис")
+main_kb.add("Повернутися назад")
+
+procedures_kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+procedures_kb.add("Стрижка", "Брови")
+procedures_kb.add("Повернутися назад")
+
+# --- Привітання залежно від часу доби ---
+def time_greeting():
+    h = datetime.datetime.now().hour
+    if 6 <= h < 12:
+        return "Доброго ранку"
+    if 12 <= h < 17:
+        return "Доброго дня"
+    if 17 <= h < 21:
+        return "Доброго вечора"
+    return "Доброї ночі"
+
+# --- Хендлер старту ---
 @dp.message_handler(commands=['start'])
-async def start_handler(message: types.Message):
-    await message.answer("Привіт! Напишіть, на яку процедуру бажаєте записатись і коли 💅")
+async def cmd_start(message: types.Message):
+    await message.answer("Ласкаво просимо!", reply_markup=main_kb)
 
-# ————— Команда /cancel —————
-@dp.message_handler(commands=['cancel'])
-async def cancel_handler(message: types.Message):
-    await message.answer("Напишіть, що саме бажаєте скасувати (процедуру, дату, інтервал або час).")
+# --- Розпочати запис ---
+@dp.message_handler(lambda m: m.text == "Розпочати запис")
+async def begin_booking(message: types.Message):
+    greeting = time_greeting()
+    await message.answer(f"{greeting}! Як я можу до Вас звертатися?", reply_markup=types.ReplyKeyboardRemove())
+    await Booking.NAME.set()
 
-# ————— Основний хендлер —————
-@dp.message_handler()
-async def handle_message(message: types.Message):
-    user_input = message.text
-    await message.answer("🔍 Аналізую ваше повідомлення...")
+# --- Повернутися назад ---
+@dp.message_handler(lambda m: m.text == "Повернутися назад", state='*')
+async def go_back(message: types.Message, state: FSMContext):
+    await state.finish()
+    await message.answer("Головне меню", reply_markup=main_kb)
 
-    # 1) AI‑парсинг intent
-    parsed     = await parse_request_with_gpt(user_input, openai)
-    proc       = parsed.get("procedure")    # манікюр/педикюр
-    raw_date   = parsed.get("date")         # YYYY-MM-DD або день тижня
-    time_exact = parsed.get("time")         # HH:MM
-    time_range = parsed.get("time_range")   # "ранком"/"після обіду"/"ввечері"
+# --- Отримання імені ---
+@dp.message_handler(state=Booking.NAME)
+async def process_name(message: types.Message, state: FSMContext):
+    await state.update_data(name=message.text)
+    await message.answer(f"Шановний {message.text}, оберіть процедуру:", reply_markup=procedures_kb)
+    await Booking.PROCEDURE.set()
 
-    # 2) Нормалізація дати
-    date = normalize_date(raw_date)
+# --- Обробка процедури ---
+@dp.message_handler(state=Booking.PROCEDURE)
+async def process_proc(message: types.Message, state: FSMContext):
+    await state.update_data(proc=message.text)
+    await message.answer("Введіть дату у форматі DD-MM-YYYY або день тижня:", reply_markup=main_kb)
+    await Booking.DATE.set()
 
-    # === Сценарій 1: якщо GPT витягнув конкретний час ===
-    if proc and date and time_exact:
-        # Перевіряємо вільність слоту
-        if not is_slot_available(date, time_exact, GOOGLE_SHEET_ID):
-            return await message.answer("❌ Вибачте, цей час вже зайнятий. Спробуйте інший.")
-        # Зберігаємо бронювання
-        save_to_sheet(message, user_input, parsed, GOOGLE_SHEET_ID)
-        await message.answer(f"✅ Вас записано на {proc} {date} о {time_exact}! Очікуйте підтвердження.")
-        # Плануємо нагадування
-        schedule_reminder(bot, message.chat.id, date, time_exact, proc)
-        # Сповіщаємо адміну
-        if ADMIN_CHAT_ID:
-            await bot.send_message(
-                ADMIN_CHAT_ID,
-                f"📬 Новий запис:\nКлієнт: {message.from_user.full_name}\nПроцедура: {proc}\nДата: {date}\nЧас: {time_exact}"
-            )
-        return
-
-    # === Сценарій 2: якщо GPT витягнув лише інтервал часу ===
-    if proc and date and time_range:
-        start, end = TIME_INTERVALS.get(time_range, (None, None))
-        if not start:
-            return await message.answer(
-                "Не розумію інтервал; скажіть 'ранком', 'після обіду' або 'ввечері'."
-            )
-        free_slots = get_free_slots(date, GOOGLE_SHEET_ID)
-        recs = filter_slots_by_interval(free_slots, start, end)
-        if recs:
-            return await message.answer(
-                f"Вільні слоти у {raw_date} ({time_range}): {', '.join(recs)}\n"
-                "Щоб забронювати, просто напишіть: напр. «манікюр 2025-07-21 15:30»"
-            )
+# --- Обробка дати ---
+@dp.message_handler(state=Booking.DATE)
+async def process_date(message: types.Message, state: FSMContext):
+    raw = message.text
+    date = normalize_date(raw)
+    if not date:
+        return await message.answer("Невірний формат дати. Спробуйте ще раз.")
+    await state.update_data(date=date, raw_date=raw)
+    # Отримуємо вільні слоти
+    write_credentials_to_file(GOOGLE_CREDENTIALS)
+    free = get_free_slots(date, GOOGLE_SHEET_ID)
+    if not free:
+        return await message.answer("Немає вільних слотів на цю дату. Введіть іншу дату:")
+    # Формуємо кнопки годин
+    kb = types.InlineKeyboardMarkup(row_width=4)
+    for hour in range(8, 21):
+        t = f"{hour:02d}:00"
+        if t in free:
+            kb.insert(types.InlineKeyboardButton(text=t, callback_data=f"time:{t}"))
         else:
-            return await message.answer(
-                f"На {raw_date} {time_range} немає вільних слотів."
-            )
+            kb.insert(types.InlineKeyboardButton(text=f"❌{t}", callback_data="busy"))
+    await message.answer("Оберіть час (ціла година):", reply_markup=kb)
+    await Booking.TIME.set()
 
-    # === Сценарій 3: fallback — AI‑чат ===
-    await message.answer("🤖 Надаю відповідь AI...")
-    try:
-        resp = await openai.ChatCompletion.acreate(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": user_input}],
-            timeout=15
-        )
-        await message.answer(resp.choices[0].message.content)
-    except Exception as e:
-        logging.error("OpenAI API error", exc_info=e)
-        await message.answer("❌ Вибачте, сталася помилка при зверненні до AI.")
+# --- Обробка часу ---
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith('time:'), state=Booking.TIME)
+async def process_time(cb: types.CallbackQuery, state: FSMContext):
+    t = cb.data.split(':',1)[1]
+    data = await state.get_data()
+    # Зберігаємо в Google Sheet
+    write_credentials_to_file(GOOGLE_CREDENTIALS)
+    save_to_sheet(cb.message, user_input=f"{data['proc']} {data['raw_date']} {t}", parsed={'procedure':data['proc'],'date':data['date'],'time_range':t}, sheet_id=GOOGLE_SHEET_ID, credentials_env_var=GOOGLE_CREDENTIALS)
+    # Плануємо нагадування
+    schedule_reminder(bot, cb.from_user.id, data['date'], t, data['proc'])
+    await cb.message.edit_reply_markup()  # прибираємо кнопки
+    await cb.message.answer(f"Дякуємо, {data['name']}! Ви записані на {data['proc']} {data['date']} о {t}.")
+    await state.finish()
 
-# ————— Точка входу —————
-if __name__ == "__main__":
+# --- Якщо обрано зайнятий ---
+@dp.callback_query_handler(lambda c: c.data=='busy', state=Booking.TIME)
+async def handle_busy(cb: types.CallbackQuery, state: FSMContext):
+    await cb.answer("Цей час зайнятий, оберіть інший.")
+
+# --- Запуск ---
+if __name__ == '__main__':
     from aiogram import executor
     executor.start_polling(dp, skip_updates=True)
