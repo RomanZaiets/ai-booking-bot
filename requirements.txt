@@ -1,4 +1,4 @@
-aiohttp~=3.8.5
+aiohttp==3.8.6
 aiogram
 openai
 python-dotenv
