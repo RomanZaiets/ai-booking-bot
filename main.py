@@ -18,20 +18,45 @@ dp = Dispatcher()
 router = Router()
 USER_NAMES = {}
 
+def get_main_keyboard():
+    return types.ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(text="Розпочати запис"), types.KeyboardButton(text="Відмінити запис")]
+        ],
+        resize_keyboard=True
+    )
+
+def get_procedure_keyboard():
+    return types.ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(text="Стрижка"), types.KeyboardButton(text="Брови")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+
+def get_time_keyboard():
+    return types.ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(text=f"{h:02d}:00")] for h in range(8, 21)
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+
 @router.message(Command('start'))
 async def start_handler(message: types.Message):
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add("Розпочати запис", "Відмінити запис")
     await message.answer(
         "Вітаю! Щоб зробити бронювання, натисніть кнопку нижче👇",
-        reply_markup=keyboard
+        reply_markup=get_main_keyboard()
     )
 
 @router.message(F.text == "Розпочати запис")
 async def begin_booking(message: types.Message):
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add("Розпочати запис", "Відмінити запис")
-    await message.answer("Будь ласка, введіть ваше ім’я (як до вас звертатись):", reply_markup=keyboard)
+    await message.answer(
+        "Будь ласка, введіть ваше ім’я (як до вас звертатись):",
+        reply_markup=get_main_keyboard()
+    )
 
 @router.message(F.text == "Відмінити запис")
 async def cancel_booking(message: types.Message):
@@ -42,9 +67,9 @@ async def cancel_booking(message: types.Message):
             USER_NAMES.pop(key)
             removed = True
     if removed:
-        await message.answer("Ваш запис було скасовано. Ви можете створити новий, натиснувши «Розпочати запис».")
+        await message.answer("Ваш запис було скасовано. Ви можете створити новий, натиснувши «Розпочати запис».", reply_markup=get_main_keyboard())
     else:
-        await message.answer("У вас немає активного запису для скасування.")
+        await message.answer("У вас немає активного запису для скасування.", reply_markup=get_main_keyboard())
 
 @router.message(F.text & ~F.text.in_(["Розпочати запис", "Відмінити запис"]))
 async def collect_name_and_book(message: types.Message):
@@ -53,11 +78,9 @@ async def collect_name_and_book(message: types.Message):
     # 1. Очікуємо ім'я
     if user_id not in USER_NAMES:
         USER_NAMES[user_id] = message.text.strip()
-        kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-        kb.add("Стрижка", "Брови")
         await message.answer(
             f"Шановний {USER_NAMES[user_id]}, оберіть процедуру:",
-            reply_markup=kb
+            reply_markup=get_procedure_keyboard()
         )
         return
 
@@ -65,11 +88,9 @@ async def collect_name_and_book(message: types.Message):
     if not USER_NAMES.get(str(user_id)+"_proc"):
         text = message.text.strip().lower()
         if text not in ("стрижка", "брови"):
-            kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-            kb.add("Стрижка", "Брови")
             await message.answer(
                 "Оберіть процедуру кнопкою нижче:",
-                reply_markup=kb
+                reply_markup=get_procedure_keyboard()
             )
             return
         USER_NAMES[str(user_id)+"_proc"] = text
@@ -90,10 +111,11 @@ async def collect_name_and_book(message: types.Message):
             if suggestions:
                 await message.answer(
                     "На жаль, цей час зайнятий. Ось вільні години цього дня:\n"
-                    + ", ".join(suggestions)
+                    + ", ".join(suggestions),
+                    reply_markup=get_time_keyboard()
                 )
             else:
-                await message.answer("Немає вільних годин на цю дату. Спробуйте іншу дату.")
+                await message.answer("Немає вільних годин на цю дату. Спробуйте іншу дату.", reply_markup=get_main_keyboard())
             return
         await schedule_reminder(bot, message.chat.id, date, time, proc)
         await message.answer(
@@ -103,11 +125,9 @@ async def collect_name_and_book(message: types.Message):
         return
 
     # Якщо нічого не підходить — підказка та стартова клавіатура
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add("Розпочати запис", "Відмінити запис")
     await message.answer(
         "Натисніть «Розпочати запис» та дотримуйтесь підказок. Якщо щось пішло не так — скасуйте і спробуйте ще раз.",
-        reply_markup=keyboard
+        reply_markup=get_main_keyboard()
     )
 
 @router.callback_query(SimpleCalendarCallback.filter())
@@ -116,13 +136,10 @@ async def process_calendar(callback_query: types.CallbackQuery, callback_data: d
     if selected:
         user_id = callback_query.from_user.id
         USER_NAMES[str(user_id)+"_date"] = date.strftime("%Y-%m-%d")
-        kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-        for h in range(8, 21):
-            kb.add(f"{h:02d}:00")
         await bot.send_message(
             callback_query.from_user.id,
             f"Обрано дату: {date.strftime('%d-%m-%Y')}\nОберіть бажаний час (годинно):",
-            reply_markup=kb
+            reply_markup=get_time_keyboard()
         )
 
 async def main():
