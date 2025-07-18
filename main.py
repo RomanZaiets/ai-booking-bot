@@ -10,7 +10,7 @@ from scheduler import schedule_reminder
 
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GOOGLE_SHEET_ID    = os.getenv("GOOGLE_SHEET_ID")
+GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
@@ -29,7 +29,9 @@ async def start_handler(message: types.Message):
 
 @router.message(F.text == "Розпочати запис")
 async def begin_booking(message: types.Message):
-    await message.answer("Будь ласка, введіть ваше ім’я (як до вас звертатись):")
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add("Розпочати запис", "Відмінити запис")
+    await message.answer("Будь ласка, введіть ваше ім’я (як до вас звертатись):", reply_markup=keyboard)
 
 @router.message(F.text == "Відмінити запис")
 async def cancel_booking(message: types.Message):
@@ -47,6 +49,8 @@ async def cancel_booking(message: types.Message):
 @router.message(F.text & ~F.text.in_(["Розпочати запис", "Відмінити запис"]))
 async def collect_name_and_book(message: types.Message):
     user_id = message.from_user.id
+
+    # 1. Очікуємо ім'я
     if user_id not in USER_NAMES:
         USER_NAMES[user_id] = message.text.strip()
         kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
@@ -57,16 +61,25 @@ async def collect_name_and_book(message: types.Message):
         )
         return
 
-    text = message.text.strip().lower()
-    if text in ("стрижка", "брови"):
-        proc = text
-        USER_NAMES[str(user_id)+"_proc"] = proc
+    # 2. Очікуємо вибір процедури
+    if not USER_NAMES.get(str(user_id)+"_proc"):
+        text = message.text.strip().lower()
+        if text not in ("стрижка", "брови"):
+            kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+            kb.add("Стрижка", "Брови")
+            await message.answer(
+                "Оберіть процедуру кнопкою нижче:",
+                reply_markup=kb
+            )
+            return
+        USER_NAMES[str(user_id)+"_proc"] = text
         await message.answer(
             "Оберіть дату через календар:",
             reply_markup=await SimpleCalendar().start_calendar()
         )
         return
 
+    # 3. Очікуємо час
     if message.text.endswith(":00"):
         time = message.text
         date = USER_NAMES.get(str(user_id)+"_date")
@@ -89,7 +102,13 @@ async def collect_name_and_book(message: types.Message):
         )
         return
 
-    await message.answer("Натисніть «Розпочати запис», щоб забронювати процедуру.")
+    # Якщо нічого не підходить — підказка та стартова клавіатура
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.add("Розпочати запис", "Відмінити запис")
+    await message.answer(
+        "Натисніть «Розпочати запис» та дотримуйтесь підказок. Якщо щось пішло не так — скасуйте і спробуйте ще раз.",
+        reply_markup=keyboard
+    )
 
 @router.callback_query(SimpleCalendarCallback.filter())
 async def process_calendar(callback_query: types.CallbackQuery, callback_data: dict):
