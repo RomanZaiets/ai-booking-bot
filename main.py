@@ -1,3 +1,4 @@
+
 from aiogram import Bot, Dispatcher, types
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 import os
@@ -58,8 +59,6 @@ async def collect_name_and_book(message: types.Message):
         await message.answer("Оберіть дату через календар:", reply_markup=await SimpleCalendar().start_calendar())
         return
 
-    # інша логіка для часу — нижче, її не чіпаємо
-
     if message.text.endswith(":00"):
         time = message.text
         date = USER_NAMES.get(user_id+"_date")
@@ -69,7 +68,8 @@ async def collect_name_and_book(message: types.Message):
             suggestions = [t for t in free if t.endswith(":00")]
             if suggestions:
                 await message.answer(
-                    "На жаль, цей час зайнятий. Ось вільні години цього дня:\n"
+                    "На жаль, цей час зайнятий. Ось вільні години цього дня:
+"
                     + ", ".join(suggestions)
                 )
             else:
@@ -95,7 +95,8 @@ async def process_calendar(callback_query: types.CallbackQuery, callback_data: d
             kb.add(f"{h:02d}:00")
         await bot.send_message(
             callback_query.from_user.id,
-            f"Обрано дату: {date.strftime('%d-%m-%Y')}\nОберіть бажаний час (годинно):",
+            f"Обрано дату: {date.strftime('%d-%m-%Y')}
+Оберіть бажаний час (годинно):",
             reply_markup=kb
         )
 
