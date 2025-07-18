@@ -2,8 +2,8 @@ import os
 import json
 import datetime
 import logging
-from dateutil import parser as date_parser
 import gspread
+from dateutil import parser as date_parser
 from oauth2client.service_account import ServiceAccountCredentials
 
 WEEKDAYS = {
@@ -54,10 +54,13 @@ def get_free_slots(date_str, sheet_id, credentials_env_var=None):
         creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json",
             ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'])
         client = gspread.authorize(creds)
-        sheet = client.open_by_key(sheet_id).sheet1
-        records = sheet.get_all_records()
-        occupied = {(r.get('date'), r.get('time')) for r in records}
-        return [slot for slot in get_all_slots() if (date_str, slot) not in occupied]
+        sheet = client.open_by_key(sheet_id)
+        worksheet = sheet.worksheet("Записи")
+        records = worksheet.get_all_records()
+        occupied = {(str(r.get('date')), str(r.get('time'))) for r in records}
+        all_slots = get_all_slots()
+        free = [slot for slot in all_slots if (date_str, slot) not in occupied]
+        return free
     except Exception as e:
         logging.error("get_free_slots error", exc_info=e)
         return []
@@ -75,9 +78,10 @@ def save_to_sheet(message, user_input, parsed, sheet_id, credentials_env_var=Non
         creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json",
             ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'])
         client = gspread.authorize(creds)
-        sheet = client.open_by_key(sheet_id).sheet1
+        sheet = client.open_by_key(sheet_id)
+        worksheet = sheet.worksheet("Записи")
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        sheet.append_row([
+        worksheet.append_row([
             now,
             message.from_user.full_name,
             user_input,
@@ -87,3 +91,19 @@ def save_to_sheet(message, user_input, parsed, sheet_id, credentials_env_var=Non
         ])
     except Exception as e:
         logging.error("save_to_sheet error", exc_info=e)
+
+def save_visitor_to_sheet(user_id, full_name):
+    try:
+        creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json",
+            ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'])
+        client = gspread.authorize(creds)
+        sheet = client.open_by_key(os.getenv("GOOGLE_SHEET_ID"))
+        try:
+            worksheet = sheet.worksheet("Visitors")
+        except gspread.exceptions.WorksheetNotFound:
+            worksheet = sheet.add_worksheet(title="Visitors", rows="100", cols="4")
+            worksheet.append_row(["datetime", "user_id", "full_name", "status"])
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        worksheet.append_row([now, str(user_id), full_name, "started"])
+    except Exception as e:
+        logging.error("save_visitor_to_sheet error", exc_info=e)
