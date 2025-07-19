@@ -1,4 +1,4 @@
-aiogram==3.7.0
+aiogram==3.5.2
 aiogram-calendar==0.6.0
 python-dotenv==1.0.1
 gspread==5.12.0
