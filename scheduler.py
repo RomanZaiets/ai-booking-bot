@@ -1,24 +1,29 @@
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.date import DateTrigger
 from datetime import datetime, timedelta
+import asyncio
 
 scheduler = AsyncIOScheduler()
-scheduler.start()
 
 def schedule_reminder(bot, chat_id, date_str, time_str, procedure):
     try:
         appointment_time = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
 
-        for delta in [timedelta(days=1), timedelta(hours=2)]:
-            reminder_time = appointment_time - delta
-            if reminder_time > datetime.now():
-                scheduler.add_job(
-                    send_reminder,
-                    trigger=DateTrigger(run_date=reminder_time),
-                    args=[bot, chat_id, procedure, date_str, time_str]
-                )
+        reminder_1_time = appointment_time - timedelta(days=1)
+        if reminder_1_time > datetime.now():
+            scheduler.add_job(
+                lambda: asyncio.create_task(send_reminder(bot, chat_id, procedure, date_str, time_str)),
+                trigger=DateTrigger(run_date=reminder_1_time)
+            )
+
+        reminder_2_time = appointment_time - timedelta(hours=2)
+        if reminder_2_time > datetime.now():
+            scheduler.add_job(
+                lambda: asyncio.create_task(send_reminder(bot, chat_id, procedure, date_str, time_str)),
+                trigger=DateTrigger(run_date=reminder_2_time)
+            )
     except Exception as e:
-        print(f"⛔ Error scheduling reminder: {e}")
+        print(f"⛔ Error in scheduling reminder: {e}")
 
 async def send_reminder(bot, chat_id, procedure, date, time):
     try:

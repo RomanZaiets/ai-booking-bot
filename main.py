@@ -1,76 +1,28 @@
 import asyncio
-import logging
-import os
-from datetime import date as dt_date
-from aiogram import Bot, Dispatcher, types, F, Router
-from aiogram.filters import Command
+from aiogram import Bot, Dispatcher, Router, F, types
+from aiogram.types import Message
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
-from dotenv import load_dotenv
-from utils import normalize_date, get_free_slots, save_visitor_to_sheet, save_to_sheet
-from scheduler import schedule_reminder
+from datetime import date as dt_date
 
-load_dotenv()
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
+from scheduler import scheduler, schedule_reminder
+from sheets import save_to_sheet, get_free_slots
+from keyboards import get_main_keyboard, get_procedure_keyboard, get_time_keyboard
 
-logging.basicConfig(level=logging.INFO)
-bot = Bot(token=TELEGRAM_BOT_TOKEN)
-dp = Dispatcher()
+API_TOKEN = "YOUR_BOT_TOKEN"  # 🔁 Заміни на свій токен
+GOOGLE_SHEET_ID = "YOUR_GOOGLE_SHEET_ID"  # 🔁 Заміни на свій ID
+
+bot = Bot(token=API_TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
 router = Router()
+
 USER_DATA = {}
 
-def get_main_keyboard():
-    return types.ReplyKeyboardMarkup(
-        keyboard=[
-            [types.KeyboardButton(text="⬅️ Назад")],
-            [types.KeyboardButton(text="Розпочати запис"), types.KeyboardButton(text="Відмінити запис")]
-        ],
-        resize_keyboard=True
-    )
-
-def get_procedure_keyboard():
-    return types.ReplyKeyboardMarkup(
-        keyboard=[
-            [types.KeyboardButton(text="Стрижка"), types.KeyboardButton(text="Брови")],
-            [types.KeyboardButton(text="⬅️ Назад")]
-        ],
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
-
-def get_time_keyboard(date):
-    free_slots = get_free_slots(date, GOOGLE_SHEET_ID)
-    if not free_slots:
-        return None
-    return types.ReplyKeyboardMarkup(
-        keyboard=[[types.KeyboardButton(text=slot)] for slot in free_slots if slot.endswith(":00")] + [[types.KeyboardButton(text="⬅️ Назад")]],
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
-
-@router.message(Command('start'))
-async def start_handler(message: types.Message):
-    save_visitor_to_sheet(message.from_user.id, message.from_user.full_name)
-    await message.answer("Вітаю! Щоб зробити бронювання, натисніть кнопку нижче👇", reply_markup=get_main_keyboard())
-
-@router.message(F.text == "⬅️ Назад")
-async def back_handler(message: types.Message):
-    await start_handler(message)
-
-@router.message(F.text == "Розпочати запис")
-async def begin_booking(message: types.Message):
-    await message.answer("Будь ласка, введіть ваше ім’я:", reply_markup=get_main_keyboard())
-
-@router.message(F.text == "Відмінити запис")
-async def cancel_booking(message: types.Message):
+# 📥 Обробка основних повідомлень
+@router.message(F.text.filter(lambda text: text not in ["⬅️ Назад", "Розпочати запис", "Відмінити запис"]))
+async def handle_booking_flow(message: Message):
     user_id = message.from_user.id
-    removed = any(USER_DATA.pop(k, None) for k in list(USER_DATA.keys()) if str(user_id) in str(k))
-    await message.answer("Ваш запис було скасовано." if removed else "У вас немає активного запису.", reply_markup=get_main_keyboard())
-
-@router.message(F.text & ~F.text.in_(["⬅️ Назад", "Розпочати запис", "Відмінити запис"]))
-async def collect_flow(message: types.Message):
-    user_id = message.from_user.id
-    text = message.text.strip()
+    text = message.text
 
     if user_id not in USER_DATA:
         USER_DATA[user_id] = text
@@ -103,6 +55,7 @@ async def collect_flow(message: types.Message):
 
     await message.answer("Будь ласка, натисніть кнопку «Розпочати запис».", reply_markup=get_main_keyboard())
 
+# 📅 Обробка календаря
 @router.callback_query(SimpleCalendarCallback.filter())
 async def process_calendar(callback_query: types.CallbackQuery, callback_data: dict):
     selected, date = await SimpleCalendar(min_date=dt_date.today()).process_selection(callback_query, callback_data)
@@ -111,7 +64,9 @@ async def process_calendar(callback_query: types.CallbackQuery, callback_data: d
         USER_DATA[f"{user_id}_date"] = date.strftime("%Y-%m-%d")
         await bot.send_message(user_id, f"Дата: {date.strftime('%d-%m-%Y')}. Оберіть час:", reply_markup=get_time_keyboard(date.strftime("%Y-%m-%d")))
 
+# 🔁 Основний запуск
 async def main():
+    scheduler.start()
     dp.include_router(router)
     await dp.start_polling(bot)
 
