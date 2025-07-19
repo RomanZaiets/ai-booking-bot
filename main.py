@@ -1,4 +1,5 @@
 import asyncio
+import os
 from aiogram import Bot, Dispatcher, Router, F, types
 from aiogram.types import Message
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -9,16 +10,22 @@ from scheduler import scheduler, schedule_reminder
 from sheets import save_to_sheet, get_free_slots
 from keyboards import get_main_keyboard, get_procedure_keyboard, get_time_keyboard
 
-API_TOKEN = "YOUR_BOT_TOKEN"  # 🔁 Заміни на свій токен
-GOOGLE_SHEET_ID = "YOUR_GOOGLE_SHEET_ID"  # 🔁 Заміни на свій ID
+# ✅ Читання токена та Google Sheet ID із середовища
+API_TOKEN = os.getenv("API_TOKEN")
+GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 
+# 🛡 Перевірка наявності токена
+if not API_TOKEN:
+    raise ValueError("❌ API_TOKEN не встановлено. Додай його у Render або .env файл.")
+
+# 🔧 Ініціалізація бота та диспетчера
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
 
 USER_DATA = {}
 
-# 📥 Обробка основних повідомлень
+# 📥 Обробка повідомлень користувача
 @router.message(F.text.filter(lambda text: text not in ["⬅️ Назад", "Розпочати запис", "Відмінити запис"]))
 async def handle_booking_flow(message: Message):
     user_id = message.from_user.id
@@ -55,7 +62,7 @@ async def handle_booking_flow(message: Message):
 
     await message.answer("Будь ласка, натисніть кнопку «Розпочати запис».", reply_markup=get_main_keyboard())
 
-# 📅 Обробка календаря
+# 📅 Обробка вибору дати
 @router.callback_query(SimpleCalendarCallback.filter())
 async def process_calendar(callback_query: types.CallbackQuery, callback_data: dict):
     selected, date = await SimpleCalendar(min_date=dt_date.today()).process_selection(callback_query, callback_data)
@@ -64,7 +71,7 @@ async def process_calendar(callback_query: types.CallbackQuery, callback_data: d
         USER_DATA[f"{user_id}_date"] = date.strftime("%Y-%m-%d")
         await bot.send_message(user_id, f"Дата: {date.strftime('%d-%m-%Y')}. Оберіть час:", reply_markup=get_time_keyboard(date.strftime("%Y-%m-%d")))
 
-# 🔁 Основний запуск
+# 🚀 Запуск бота
 async def main():
     scheduler.start()
     dp.include_router(router)
