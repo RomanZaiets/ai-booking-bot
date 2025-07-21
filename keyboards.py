@@ -13,12 +13,12 @@ def get_main_keyboard():
 
 def get_procedure_keyboard():
     """
-    Вибір процедури: Манікюр / Педикюр
+    Вибір процедури: Стрижка / Брови
     """
     keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
     keyboard.add(
-        KeyboardButton("💅 Манікюр"),
-        KeyboardButton("🦶 Педикюр")
+        KeyboardButton("Стрижка"),
+        KeyboardButton("Брови")
     )
     return keyboard
 
