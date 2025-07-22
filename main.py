@@ -1,188 +1,113 @@
-import asyncio
 import os
-from aiogram import Bot, Dispatcher, Router, F, types
-from aiogram.types import Message
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
-from datetime import date as dt_date
+import logging
+from aiogram import Bot, Dispatcher, types
+from aiogram.utils import executor
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.dispatcher import FSMContext
 
-from scheduler import scheduler, schedule_reminder
-from utils import save_to_sheet, get_free_slots
+from utils import normalize_date, get_free_slots, save_to_sheet, save_visitor_to_sheet
 from keyboards import get_main_keyboard, get_procedure_keyboard, get_time_keyboard
 
-# Read token and Google Sheet ID from environment
+# Імпорт таймера нагадувань (підтримує одразу два варіанти назви файлу)
+try:
+    from scheduler import scheduler, schedule_reminder
+except ImportError:
+    from sheduler import scheduler, schedule_reminder
+
+# Налаштування логування
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+# Детальний лог для APScheduler
+logging.getLogger('apscheduler').setLevel(logging.DEBUG)
+
+# Змінні середовища
 API_TOKEN = os.getenv("API_TOKEN")
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
+logger.info(f"API_TOKEN set: {'Yes' if API_TOKEN else 'No'}")
+logger.info(f"GOOGLE_SHEET_ID set: {'Yes' if GOOGLE_SHEET_ID else 'No'}")
 
-# Ensure the token is set
 if not API_TOKEN:
-    raise ValueError("❌ API_TOKEN is not set. Add it to your environment variables.")
+    logger.error("API_TOKEN is not set. Exiting.")
+    exit(1)
+if not GOOGLE_SHEET_ID:
+    logger.warning("GOOGLE_SHEET_ID is not set. Free slots and save_to_sheet will fail.")
 
+# Ініціалізація бота та диспетчера
 bot = Bot(token=API_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
-router = Router()
+storage = MemoryStorage()
+dp = Dispatcher(bot, storage=storage)
 
-# In-memory storage for user state
-auth_data = {}
+# Стани фреймворку FSM для бронювання
+class BookingStates(StatesGroup):
+    waiting_procedure = State()
+    waiting_date = State()
+    waiting_time = State()
 
-# /start handler
-def reset_user(user_id: int):
-    auth_data.pop(user_id, None)
+# Команда /start
+@dp.message_handler(commands=["start"])
+async def cmd_start(message: types.Message):
+    await message.answer("Вітаю! Оберіть дію:", reply_markup=get_main_keyboard())
 
-@router.message(F.text == "/start")
-async def cmd_start(message: Message):
-    user_id = message.from_user.id
-    reset_user(user_id)
-    await message.answer(
-        "Привіт! Натисніть «Розпочати запис», щоб почати.",
-        reply_markup=get_main_keyboard()
+# Початок запису
+@dp.message_handler(lambda m: m.text and m.text.strip().lower().startswith("📝"), state=None)
+async def cmd_book(message: types.Message):
+    logger.info(f"User {message.from_user.id} initiated booking")
+    save_visitor_to_sheet(message.from_user.id, message.from_user.full_name)
+    await message.answer("Будь ласка, оберіть процедуру:", reply_markup=get_procedure_keyboard())
+    await BookingStates.waiting_procedure.set()
+
+# Вибір процедури
+@dp.message_handler(lambda m: m.text and m.text.strip().lower() in ["стрижка", "брови"], state=BookingStates.waiting_procedure)
+async def process_procedure(message: types.Message, state: FSMContext):
+    await state.update_data(procedure=message.text.strip())
+    await message.answer("Введіть дату (YYYY-MM-DD або день тижня, напр. 'понеділок'):")
+    await BookingStates.waiting_date.set()
+
+# Вибір дати
+@dp.message_handler(state=BookingStates.waiting_date)
+async def process_date(message: types.Message, state: FSMContext):
+    raw = message.text.strip()
+    date = normalize_date(raw)
+    if not date:
+        await message.reply("Невірний формат дати. Спробуйте ще раз.")
+        return
+    await state.update_data(date=date)
+
+    slots = get_free_slots(date, GOOGLE_SHEET_ID)
+    if not slots:
+        await message.reply("Немає вільних слотів на цю дату. Введіть іншу дату:")
+        return
+    await message.answer("Оберіть час:", reply_markup=get_time_keyboard(slots))
+    await BookingStates.waiting_time.set()
+
+# Вибір часу та підтвердження
+@dp.message_handler(state=BookingStates.waiting_time)
+async def process_time(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    selected = message.text.strip()
+    if selected not in get_free_slots(data['date'], GOOGLE_SHEET_ID):
+        await message.reply("Невірний час. Будь ласка, оберіть час з клавіатури.")
+        return
+
+    # Збереження бронювання
+    save_to_sheet(
+        message,
+        user_input=f"{data['procedure']} {data['date']} {selected}",
+        parsed={**data, "time_range": selected},
+        sheet_id=GOOGLE_SHEET_ID
     )
+    # Планування нагадувань
+    schedule_reminder(bot, message.chat.id, data['date'], selected, data['procedure'])
 
-# Cancel booking
-@router.message(F.text == "Відмінити запис")
-async def cancel_booking(message: Message):
-    user_id = message.from_user.id
-    reset_user(user_id)
     await message.answer(
-        "Запис скасовано.",
-        reply_markup=get_main_keyboard()
-    )
-
-# Back button
-@router.message(F.text == "⬅️ Назад")
-async def go_back(message: Message):
-    user_id = message.from_user.id
-    user_state = auth_data.get(user_id, {})
-    # Remove last step
-    if "time" in user_state:
-        user_state.pop("time")
-        await message.answer("Оберіть час:", reply_markup=get_time_keyboard(user_state.get("date")))
-    elif "date" in user_state:
-        user_state.pop("date")
-        await message.answer("Оберіть дату через календар:", reply_markup=await SimpleCalendar(min_date=dt_date.today()).start_calendar())
-    elif "procedure" in user_state:
-        user_state.pop("procedure")
-        await message.answer("Яку процедуру бажаєте?", reply_markup=get_procedure_keyboard())
-    else:
-        reset_user(user_id)
-        await message.answer(
-            "Повернулися до початку.",
-            reply_markup=get_main_keyboard()
-        )
-
-# Start booking flow
-def init_user(user_id: int):
-    auth_data[user_id] = {"step": "name"}
-
-@router.message(F.text == "Розпочати запис")
-async def start_booking(message: Message):
-    user_id = message.from_user.id
-    init_user(user_id)
-    await message.answer(
-        "Будь ласка, введіть ваше ім'я:",
+        f"✅ Ваш запис підтверджено:\nПроцедура: {data['procedure']}\nДата: {data['date']}\nЧас: {selected}",
         reply_markup=types.ReplyKeyboardRemove()
     )
+    await state.finish()
 
-# Handle booking dialogue
-@router.message(F.text.filter(lambda t: t not in ["⬅️ Назад", "Розпочати запис", "Відмінити запис"]))
-async def handle_booking_flow(message: Message):
-    user_id = message.from_user.id
-    text = message.text.strip()
-    user_state = auth_data.get(user_id)
-
-    # If user not initialized, ask to start
-    if not user_state:
-        await message.answer(
-            "Будь ласка, натисніть «Розпочати запис».", reply_markup=get_main_keyboard()
-        )
-        return
-
-    # Step: name
-    if user_state.get("step") == "name":
-        user_state["name"] = text
-        user_state["step"] = "procedure"
-        await message.answer(
-            f"{text}, яку процедуру бажаєте?", reply_markup=get_procedure_keyboard()
-        )
-        return
-
-    # Step: procedure
-    if user_state.get("step") == "procedure":
-        if text not in ("Стрижка", "Брови"):
-            await message.answer("Оберіть процедуру кнопкою:", reply_markup=get_procedure_keyboard())
-            return
-        user_state["procedure"] = text
-        user_state["step"] = "date"
-        await message.answer(
-            "Оберіть дату через календар:",
-            reply_markup=await SimpleCalendar(min_date=dt_date.today()).start_calendar()
-        )
-        return
-
-    # Step: date selected via calendar callback
-    if user_state.get("step") == "time_selection" or user_state.get("step") == "date":
-        # Time selection triggered by calendar callback, ignore raw messages
-        await message.answer("Будь ласка, оберіть дату у календарі або час через кнопки.")
-        return
-
-    # Step: time as text ends with :00
-    if text.endswith(":00") and "date" in user_state:
-        date_str = user_state["date"]
-        proc = user_state["procedure"]
-        slots = get_free_slots(date_str, GOOGLE_SHEET_ID)
-        if text not in slots:
-            await message.answer(
-                "Цей час зайнятий. Виберіть інший:",
-                reply_markup=get_time_keyboard(slots)
-            )
-            return
-        # Save to sheet and schedule reminder
-        await save_to_sheet(
-            message,
-            user_state["name"],
-            {"procedure": proc, "date": date_str, "time_range": text},
-            GOOGLE_SHEET_ID
-        )
-        await schedule_reminder(bot, message.chat.id, date_str, text, proc)
-        await message.answer(
-            f"Вас записано на {proc} {date_str} о {text}.",
-            reply_markup=types.ReplyKeyboardRemove()
-        )
-        reset_user(user_id)
-        return
-
-    # Fallback
-    await message.answer(
-        "Будь ласка, натисніть кнопку «Розпочати запис».",
-        reply_markup=get_main_keyboard()
-    )
-
-# Calendar callback handler
-@router.callback_query(SimpleCalendarCallback.filter())
-async def process_calendar(callback_query: types.CallbackQuery, callback_data: dict):
-    selected, date_obj = await SimpleCalendar(min_date=dt_date.today()).process_selection(
-        callback_query, callback_data
-    )
-    if selected:
-        user_id = callback_query.from_user.id
-        user_state = auth_data.get(user_id)
-        if not user_state:
-            await bot.send_message(user_id, "Будь ласка, почніть запис командою /start.")
-            return
-        date_str = date_obj.strftime("%Y-%m-%d")
-        user_state["date"] = date_str
-        user_state["step"] = "time"
-        slots = get_free_slots(date_str, GOOGLE_SHEET_ID)
-        await bot.send_message(
-            user_id,
-            f"Дата: {date_obj.strftime('%d-%m-%Y')}. Оберіть час:",
-            reply_markup=get_time_keyboard(slots)
-        )
-
-async def main():
+if __name__ == '__main__':
+    logger.info("Starting scheduler...")
     scheduler.start()
-    dp.include_router(router)
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    logger.info("Starting bot polling...")
+    executor.start_polling(dp, skip_updates=True)
